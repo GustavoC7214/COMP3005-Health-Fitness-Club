@@ -1,14 +1,16 @@
 """Tests for Trainer ORM model definitions."""
 
-from datetime import datetime
+import os
+from datetime import date, datetime
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import CheckConstraint, Index, create_engine
+from sqlalchemy import CheckConstraint, Index, create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database.base import Base
-from app.database.connection import get_database_url
+from app.models.member import Member
 from app.models.trainer import PTSession, Trainer, TrainerAvailability
 from app.trainers.trainer_service import (
     add_trainer_availability,
@@ -214,65 +216,77 @@ def test_get_trainer_availability_ordered(db_session, trainer):
 
 @pytest.fixture
 def db_session():
-    """Provide an isolated PostgreSQL transaction for each test."""
-    from sqlalchemy import Column, Integer, String, Table
-    from sqlalchemy.engine import make_url
+    """Provide an isolated PostgreSQL schema for each trainer test."""
+    database_url = os.getenv("TEST_DATABASE_URL")
 
-    from app.database.base import Base
+    if not database_url:
+        pytest.skip("Set TEST_DATABASE_URL to run PostgreSQL tests.")
 
-    database_url = make_url(get_database_url()).set(database="health_fitness_club_test")
-    engine = create_engine(database_url)
+    admin_engine = create_engine(database_url)
 
-    # Register a temporary Member table with the SAME metadata
-    # used by the Trainer and PTSession ORM models.
-    if "members" not in Base.metadata.tables:
-        Table(
-            "members",
-            Base.metadata,
-            Column("member_id", Integer, primary_key=True),
-            Column("first_name", String(100), nullable=False),
-            Column("last_name", String(100), nullable=False),
+    if (
+        admin_engine.dialect.name != "postgresql"
+        or admin_engine.dialect.driver != "psycopg"
+    ):
+        admin_engine.dispose()
+        pytest.fail("Trainer tests require PostgreSQL with psycopg.")
+
+    schema = "test_trainer_" + uuid4().hex
+    engine = None
+
+    try:
+        with admin_engine.begin() as connection:
+            connection.execute(
+                text("CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public")
+            )
+            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+
+        engine = create_engine(
+            database_url,
+            connect_args={"options": f"-csearch_path={schema},public -ctimezone=UTC"},
         )
 
-    with engine.begin() as connection:
-        connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS btree_gist")
-
         Base.metadata.create_all(
-            bind=connection,
+            bind=engine,
             tables=[
-                Base.metadata.tables["members"],
+                Member.__table__,
                 Trainer.__table__,
                 TrainerAvailability.__table__,
                 PTSession.__table__,
             ],
-            checkfirst=True,
+            checkfirst=False,
         )
 
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = Session(bind=connection)
+        with Session(engine, expire_on_commit=False) as session:
+            try:
+                yield session
+            finally:
+                session.rollback()
 
-    try:
-        yield session
     finally:
-        session.close()
-        transaction.rollback()
-        connection.close()
-        engine.dispose()
+        if engine is not None:
+            engine.dispose()
+
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+        admin_engine.dispose()
 
 
 @pytest.fixture
 def member(db_session):
-    """Create a test member without depending on Member 1's model."""
-    from sqlalchemy import text
-
-    member_id = db_session.scalar(
-        text(
-            "INSERT INTO members (first_name, last_name) "
-            "VALUES ('Jamie', 'Taylor') RETURNING member_id"
-        )
+    """Create a real member for personal training tests."""
+    member = Member(
+        first_name="Jamie",
+        last_name="Taylor",
+        email="jamie.taylor@example.com",
+        date_of_birth=date(2000, 1, 1),
     )
-    return member_id
+
+    db_session.add(member)
+    db_session.flush()
+
+    return member.member_id
 
 
 def test_book_pt_session(db_session, trainer, member):
