@@ -295,6 +295,8 @@ def test_view_assigned_members_menu(capsys):
         "session_id": 21,
         "start_time": datetime(2026, 11, 19, 10),
         "end_time": datetime(2026, 11, 19, 11),
+        "latest_health_metric": None,
+        "active_goals": [],
     }
 
     with (
@@ -315,6 +317,8 @@ def test_view_assigned_members_menu(capsys):
     assert "Jamie Taylor" in output
     assert "Member 10" in output
     assert "Session 21" in output
+    assert "No health metrics recorded." in output
+    assert "No active fitness goals." in output
 
 
 def test_search_assigned_members_menu(capsys):
@@ -402,3 +406,70 @@ def test_view_mixed_trainer_schedule_menu(capsys):
     assert "Member 3" in output
 
     assert output.index("Group Class 5") < output.index("PT Session 1")
+
+
+def test_view_assigned_member_health_information(capsys):
+    """Option seven displays health metrics and active fitness goals."""
+    fake_session = object()
+
+    @contextmanager
+    def fake_db_session():
+        yield fake_session
+
+    assigned_member = {
+        "member_id": 10,
+        "first_name": "Jamie",
+        "last_name": "Taylor",
+        "session_id": 21,
+        "start_time": datetime(2026, 11, 25, 10),
+        "end_time": datetime(2026, 11, 25, 11),
+        "latest_health_metric": {
+            "metric_id": 1,
+            "recorded_at": datetime(2026, 11, 24, 9),
+            "weight_kg": 78.5,
+            "height_cm": 180,
+            "heart_rate_bpm": 72,
+        },
+        "active_goals": [
+            {
+                "goal_id": 1,
+                "target_weight_kg": 75,
+                "baseline_weight_kg": 80,
+                "target_date": None,
+                "status": "active",
+            }
+        ],
+    }
+
+    with (
+        patch(
+            "builtins.input",
+            side_effect=["7", "5", "Jamie", "0"],
+        ),
+        patch(
+            "app.trainers.trainer_cli.get_db_session",
+            side_effect=fake_db_session,
+        ),
+        patch(
+            "app.trainers.trainer_cli.get_trainer_assigned_members",
+            return_value=[assigned_member],
+        ) as mock_members,
+    ):
+        run_trainer_cli()
+
+    mock_members.assert_called_once_with(
+        fake_session,
+        5,
+        "Jamie",
+    )
+
+    output = capsys.readouterr().out
+
+    assert "Jamie Taylor" in output
+    assert "Latest health metrics:" in output
+    assert "Weight: 78.5 kg" in output
+    assert "Height: 180 cm" in output
+    assert "Heart rate: 72 bpm" in output
+    assert "Active fitness goals:" in output
+    assert "Target weight: 75 kg" in output
+    assert "Baseline weight: 80 kg" in output

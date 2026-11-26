@@ -143,13 +143,52 @@ def run_trainer_cli() -> None:
 
                     for member in members:
                         print(
-                            f"{member['first_name']} "
+                            f"\n{member['first_name']} "
                             f"{member['last_name']} "
-                            f"(Member {member['member_id']}), "
+                            f"(Member {member['member_id']})"
+                        )
+
+                        print(
                             f"Session {member['session_id']}: "
                             f"{member['start_time']} - "
                             f"{member['end_time']}"
                         )
+
+                        metric = member["latest_health_metric"]
+
+                        print("Latest health metrics:")
+
+                        if metric is None:
+                            print("  No health metrics recorded.")
+                        else:
+                            print(f"  Recorded at: {metric['recorded_at']}")
+
+                            if metric["weight_kg"] is not None:
+                                print(f"  Weight: {metric['weight_kg']} kg")
+
+                            if metric["height_cm"] is not None:
+                                print(f"  Height: {metric['height_cm']} cm")
+
+                            if metric["heart_rate_bpm"] is not None:
+                                print(f"  Heart rate: {metric['heart_rate_bpm']} bpm")
+
+                        print("Active fitness goals:")
+
+                        if not member["active_goals"]:
+                            print("  No active fitness goals.")
+
+                        for goal in member["active_goals"]:
+                            print(f"  Goal {goal['goal_id']}")
+                            print(f"    Target weight: {goal['target_weight_kg']} kg")
+
+                            if goal["baseline_weight_kg"] is not None:
+                                print(
+                                    f"    Baseline weight: "
+                                    f"{goal['baseline_weight_kg']} kg"
+                                )
+
+                            if goal["target_date"] is not None:
+                                print(f"    Target date: {goal['target_date']}")
 
         except (ValueError, OverflowError) as exc:
             print(f"Error: {exc}")

@@ -1,7 +1,8 @@
 """Tests for Trainer ORM model definitions."""
 
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -10,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database.base import Base
-from app.models.member import Member
+from app.models.member import FitnessGoal, HealthMetric, Member
 from app.models.trainer import PTSession, Trainer, TrainerAvailability
 from app.trainers.trainer_service import (
     add_trainer_availability,
@@ -250,6 +251,8 @@ def db_session():
             bind=engine,
             tables=[
                 Member.__table__,
+                FitnessGoal.__table__,
+                HealthMetric.__table__,
                 Trainer.__table__,
                 TrainerAvailability.__table__,
                 PTSession.__table__,
@@ -890,3 +893,189 @@ def test_search_treats_wildcards_as_literal_characters(db_session, trainer, memb
     assert get_trainer_assigned_members(db_session, trainer.trainer_id, "%") == []
 
     assert get_trainer_assigned_members(db_session, trainer.trainer_id, "_") == []
+
+
+def test_assigned_members_are_unique(db_session, trainer, member):
+    """Multiple sessions must not duplicate an assigned member."""
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 9),
+        datetime(2026, 11, 25, 14),
+    )
+
+    first = book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 9),
+        datetime(2026, 11, 25, 10),
+    )
+
+    book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 11),
+        datetime(2026, 11, 25, 12),
+    )
+
+    results = get_trainer_assigned_members(
+        db_session,
+        trainer.trainer_id,
+    )
+
+    assert len(results) == 1
+    assert results[0]["member_id"] == member
+    assert results[0]["session_id"] == first.session_id
+
+
+def test_assigned_member_without_health_information(db_session, trainer, member):
+    """Members without metrics or goals must remain visible."""
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 9),
+        datetime(2026, 11, 25, 12),
+    )
+
+    book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 10),
+        datetime(2026, 11, 25, 11),
+    )
+
+    results = get_trainer_assigned_members(
+        db_session,
+        trainer.trainer_id,
+    )
+
+    assert len(results) == 1
+    assert results[0]["latest_health_metric"] is None
+    assert results[0]["active_goals"] == []
+
+
+def test_assigned_member_returns_latest_health_metric(db_session, trainer, member):
+    """Only the most recent health metric should be returned."""
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 9),
+        datetime(2026, 11, 25, 12),
+    )
+
+    book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 10),
+        datetime(2026, 11, 25, 11),
+    )
+
+    older_metric = HealthMetric(
+        member_id=member,
+        recorded_at=datetime(2026, 11, 20, 9, tzinfo=UTC),
+        weight_kg=Decimal("80.00"),
+    )
+
+    latest_metric = HealthMetric(
+        member_id=member,
+        recorded_at=datetime(2026, 11, 24, 9, tzinfo=UTC),
+        weight_kg=Decimal("78.50"),
+        height_cm=Decimal("180.00"),
+        heart_rate_bpm=72,
+    )
+
+    db_session.add_all([older_metric, latest_metric])
+    db_session.flush()
+
+    results = get_trainer_assigned_members(
+        db_session,
+        trainer.trainer_id,
+    )
+
+    metric = results[0]["latest_health_metric"]
+
+    assert metric["metric_id"] == latest_metric.metric_id
+    assert metric["weight_kg"] == Decimal("78.50")
+    assert metric["height_cm"] == Decimal("180.00")
+    assert metric["heart_rate_bpm"] == 72
+
+
+def test_assigned_member_returns_only_active_goals(db_session, trainer, member):
+    """Completed and abandoned goals must not be displayed."""
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 9),
+        datetime(2026, 11, 25, 12),
+    )
+
+    book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 25, 10),
+        datetime(2026, 11, 25, 11),
+    )
+
+    active_goal = FitnessGoal(
+        member_id=member,
+        target_weight_kg=Decimal("75.00"),
+        baseline_weight_kg=Decimal("80.00"),
+        status="active",
+    )
+
+    completed_goal = FitnessGoal(
+        member_id=member,
+        target_weight_kg=Decimal("82.00"),
+        status="completed",
+    )
+
+    abandoned_goal = FitnessGoal(
+        member_id=member,
+        target_weight_kg=Decimal("70.00"),
+        status="abandoned",
+    )
+
+    db_session.add_all([active_goal, completed_goal, abandoned_goal])
+    db_session.flush()
+
+    results = get_trainer_assigned_members(
+        db_session,
+        trainer.trainer_id,
+    )
+
+    goals = results[0]["active_goals"]
+
+    assert len(goals) == 1
+    assert goals[0]["goal_id"] == active_goal.goal_id
+    assert goals[0]["target_weight_kg"] == Decimal("75.00")
+    assert goals[0]["status"] == "active"
+
+
+def test_unassigned_member_health_information_is_hidden(db_session, trainer, member):
+    """A trainer must not receive an unassigned member's health data."""
+    metric = HealthMetric(
+        member_id=member,
+        weight_kg=Decimal("78.50"),
+    )
+
+    goal = FitnessGoal(
+        member_id=member,
+        target_weight_kg=Decimal("75.00"),
+        status="active",
+    )
+
+    db_session.add_all([metric, goal])
+    db_session.flush()
+
+    results = get_trainer_assigned_members(
+        db_session,
+        trainer.trainer_id,
+        "Jamie",
+    )
+
+    assert results == []

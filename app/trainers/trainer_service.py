@@ -2,9 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.members.member_queries import member_goals
+from app.models.member import HealthMetric, Member
 from app.models.trainer import PTSession, Trainer, TrainerAvailability
 
 
@@ -77,13 +79,9 @@ def book_pt_session(
     if trainer is None:
         raise ValueError(f"Trainer {trainer_id} does not exist.")
 
-    # The Member ORM model is not implemented yet.
-    # Verify membership using the agreed shared table contract.
-    member_exists = session.scalar(
-        text("SELECT EXISTS(SELECT 1 FROM members WHERE member_id = :id)"),
-        {"id": member_id},
-    )
-    if not member_exists:
+    member = session.get(Member, member_id)
+
+    if member is None:
         raise ValueError(f"Member {member_id} does not exist.")
 
     # A single availability interval must contain the entire booking.
@@ -238,49 +236,106 @@ def get_trainer_assigned_members(
     trainer_id: int,
     search_name: str | None = None,
 ) -> list[dict]:
-    """Return a trainer's assigned members, optionally filtered by name."""
+    """Return assigned members with their latest metrics and active goals."""
     trainer = session.get(Trainer, trainer_id)
+
     if trainer is None:
         raise ValueError(f"Trainer {trainer_id} does not exist.")
 
-    query = """
-        SELECT
-            m.member_id,
-            m.first_name,
-            m.last_name,
-            p.session_id,
-            p.start_time,
-            p.end_time
-        FROM pt_sessions AS p
-        JOIN members AS m
-            ON p.member_id = m.member_id
-        WHERE p.trainer_id = :trainer_id
-          AND p.status = 'scheduled'
-    """
-
-    parameters = {"trainer_id": trainer_id}
+    query = (
+        select(Member, PTSession)
+        .join(
+            PTSession,
+            PTSession.member_id == Member.member_id,
+        )
+        .where(
+            PTSession.trainer_id == trainer_id,
+            PTSession.status == "scheduled",
+        )
+    )
 
     if search_name is not None and search_name.strip():
-        query += r"""
-        AND (
-            m.first_name ILIKE :search_pattern ESCAPE '\'
-            OR m.last_name ILIKE :search_pattern ESCAPE '\'
-            OR CONCAT(m.first_name, ' ', m.last_name)
-                ILIKE :search_pattern ESCAPE '\'
-        )
-        """
         escaped_name = (
             search_name.strip()
             .replace("\\", "\\\\")
             .replace("%", "\\%")
             .replace("_", "\\_")
         )
-        parameters["search_pattern"] = f"%{escaped_name}%"
 
-    query += """
-        ORDER BY p.start_time, p.session_id
-    """
+        pattern = f"%{escaped_name}%"
 
-    results = session.execute(text(query), parameters)
+        query = query.where(
+            or_(
+                Member.first_name.ilike(pattern, escape="\\"),
+                Member.last_name.ilike(pattern, escape="\\"),
+                func.concat(
+                    Member.first_name,
+                    " ",
+                    Member.last_name,
+                ).ilike(pattern, escape="\\"),
+            )
+        )
 
-    return [dict(row) for row in results.mappings()]
+    query = query.order_by(
+        PTSession.start_time,
+        PTSession.session_id,
+    )
+
+    results = []
+    seen_members = set()
+
+    for member, booking in session.execute(query):
+        if member.member_id in seen_members:
+            continue
+
+        seen_members.add(member.member_id)
+
+        latest_metric = session.scalar(
+            select(HealthMetric)
+            .where(HealthMetric.member_id == member.member_id)
+            .order_by(
+                HealthMetric.recorded_at.desc(),
+                HealthMetric.metric_id.desc(),
+            )
+            .limit(1)
+        )
+
+        active_goals = member_goals(
+            session,
+            member.member_id,
+            active_only=True,
+        )
+
+        results.append(
+            {
+                "member_id": member.member_id,
+                "first_name": member.first_name,
+                "last_name": member.last_name,
+                "session_id": booking.session_id,
+                "start_time": booking.start_time,
+                "end_time": booking.end_time,
+                "latest_health_metric": (
+                    {
+                        "metric_id": latest_metric.metric_id,
+                        "recorded_at": latest_metric.recorded_at,
+                        "weight_kg": latest_metric.weight_kg,
+                        "height_cm": latest_metric.height_cm,
+                        "heart_rate_bpm": latest_metric.heart_rate_bpm,
+                    }
+                    if latest_metric is not None
+                    else None
+                ),
+                "active_goals": [
+                    {
+                        "goal_id": goal.goal_id,
+                        "target_weight_kg": goal.target_weight_kg,
+                        "baseline_weight_kg": goal.baseline_weight_kg,
+                        "target_date": goal.target_date,
+                        "status": goal.status,
+                    }
+                    for goal in active_goals
+                ],
+            }
+        )
+
+    return results
