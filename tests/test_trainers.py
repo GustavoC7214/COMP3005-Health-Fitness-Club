@@ -1,7 +1,7 @@
 """Tests for Trainer ORM model definitions."""
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -1079,3 +1079,144 @@ def test_unassigned_member_health_information_is_hidden(db_session, trainer, mem
     )
 
     assert results == []
+
+
+def test_availability_normalizes_timezone(db_session, trainer):
+    """Timezone-aware availability must be stored as naive UTC."""
+    eastern = timezone(timedelta(hours=-5))
+
+    slot = add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 9, tzinfo=eastern),
+        datetime(2026, 11, 27, 12, tzinfo=eastern),
+    )
+
+    db_session.refresh(slot)
+
+    assert slot.start_time == datetime(2026, 11, 27, 14)
+    assert slot.end_time == datetime(2026, 11, 27, 17)
+    assert slot.start_time.tzinfo is None
+    assert slot.end_time.tzinfo is None
+
+
+def test_booking_normalizes_timezone(db_session, trainer, member):
+    """Timezone-aware bookings must match UTC availability."""
+    eastern = timezone(timedelta(hours=-5))
+
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 14),
+        datetime(2026, 11, 27, 18),
+    )
+
+    booking = book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 10, tzinfo=eastern),
+        datetime(2026, 11, 27, 11, tzinfo=eastern),
+    )
+
+    db_session.refresh(booking)
+
+    assert booking.start_time == datetime(2026, 11, 27, 15)
+    assert booking.end_time == datetime(2026, 11, 27, 16)
+    assert booking.start_time.tzinfo is None
+    assert booking.status == "scheduled"
+
+
+def test_reschedule_normalizes_timezone(db_session, trainer, member):
+    """Rescheduled appointments must be stored as naive UTC."""
+    eastern = timezone(timedelta(hours=-5))
+
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 14),
+        datetime(2026, 11, 27, 18),
+    )
+
+    booking = book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 14),
+        datetime(2026, 11, 27, 15),
+    )
+
+    updated = reschedule_pt_session(
+        db_session,
+        booking.session_id,
+        datetime(2026, 11, 27, 11, tzinfo=eastern),
+        datetime(2026, 11, 27, 12, tzinfo=eastern),
+    )
+
+    db_session.refresh(updated)
+
+    assert updated.start_time == datetime(2026, 11, 27, 16)
+    assert updated.end_time == datetime(2026, 11, 27, 17)
+    assert updated.start_time.tzinfo is None
+
+
+def test_reject_availability_overlap_across_timezones(db_session, trainer):
+    """Equivalent time intervals must conflict across timezones."""
+    eastern = timezone(timedelta(hours=-5))
+
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 14),
+        datetime(2026, 11, 27, 17),
+    )
+
+    with pytest.raises(ValueError, match="overlaps"):
+        add_trainer_availability(
+            db_session,
+            trainer.trainer_id,
+            datetime(2026, 11, 27, 10, tzinfo=eastern),
+            datetime(2026, 11, 27, 13, tzinfo=eastern),
+        )
+
+
+def test_reject_booking_overlap_across_timezones(db_session, trainer, member):
+    """Different timezone representations must not bypass conflicts."""
+    eastern = timezone(timedelta(hours=-5))
+
+    add_trainer_availability(
+        db_session,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 14),
+        datetime(2026, 11, 27, 18),
+    )
+
+    book_pt_session(
+        db_session,
+        member,
+        trainer.trainer_id,
+        datetime(2026, 11, 27, 15),
+        datetime(2026, 11, 27, 16),
+    )
+
+    with pytest.raises(ValueError, match="trainer already"):
+        book_pt_session(
+            db_session,
+            member,
+            trainer.trainer_id,
+            datetime(2026, 11, 27, 10, 30, tzinfo=eastern),
+            datetime(2026, 11, 27, 11, 30, tzinfo=eastern),
+        )
+
+
+def test_reject_invalid_interval_after_timezone_normalization(db_session, trainer):
+    """Interval validation must compare actual instants."""
+    eastern = timezone(timedelta(hours=-5))
+
+    with pytest.raises(ValueError, match="End time must be after"):
+        add_trainer_availability(
+            db_session,
+            trainer.trainer_id,
+            datetime(2026, 11, 27, 10, tzinfo=eastern),
+            datetime(2026, 11, 27, 14, tzinfo=UTC),
+        )

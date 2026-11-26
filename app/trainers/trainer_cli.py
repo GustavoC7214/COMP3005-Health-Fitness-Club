@@ -5,7 +5,10 @@ from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.connection import get_db_session
-from app.trainers.schedule import build_trainer_schedule
+from app.trainers.schedule import (
+    build_trainer_schedule,
+    format_schedule_time,
+)
 from app.trainers.trainer_service import (
     add_trainer_availability,
     book_pt_session,
@@ -23,9 +26,9 @@ def read_integer(prompt: str) -> int:
 
 
 def read_datetime(prompt: str) -> datetime:
-    """Read a date and time in ISO format."""
+    """Read a UTC date and time as a naive datetime for database storage."""
     return datetime.strptime(
-        input(f"{prompt} (YYYY-MM-DD HH:MM): ").strip(),
+        input(f"{prompt} (YYYY-MM-DD HH:MM, UTC): ").strip(),
         "%Y-%m-%d %H:%M",
     )
 
@@ -33,6 +36,7 @@ def read_datetime(prompt: str) -> datetime:
 def show_menu() -> None:
     """Display trainer operations."""
     print("\n=== Trainer Management ===")
+    print("All scheduling times are in UTC.")
     print("1. Add trainer availability")
     print("2. View trainer availability")
     print("3. Book personal training session")
@@ -78,7 +82,8 @@ def run_trainer_cli() -> None:
                     for slot in slots:
                         print(
                             f"{slot.availability_id}: "
-                            f"{slot.start_time} - {slot.end_time}"
+                            f"{format_schedule_time(slot.start_time)} - "
+                            f"{format_schedule_time(slot.end_time)}"
                         )
 
                 elif choice == "3":
@@ -123,7 +128,8 @@ def run_trainer_cli() -> None:
                         print(
                             f"{activity} {entry.entry_id}: "
                             f"{entry.description}, "
-                            f"{entry.start_time} - {entry.end_time}"
+                            f"{format_schedule_time(entry.start_time)} - "
+                            f"{format_schedule_time(entry.end_time)}"
                         )
 
                 elif choice == "7":
@@ -150,8 +156,8 @@ def run_trainer_cli() -> None:
 
                         print(
                             f"Session {member['session_id']}: "
-                            f"{member['start_time']} - "
-                            f"{member['end_time']}"
+                            f"{format_schedule_time(member['start_time'])} - "
+                            f"{format_schedule_time(member['end_time'])}"
                         )
 
                         metric = member["latest_health_metric"]

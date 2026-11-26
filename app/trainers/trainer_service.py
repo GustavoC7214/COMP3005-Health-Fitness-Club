@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.members.member_queries import member_goals
 from app.models.member import HealthMetric, Member
 from app.models.trainer import PTSession, Trainer, TrainerAvailability
+from app.trainers.schedule import to_naive_utc
 
 
 def add_trainer_availability(
@@ -17,6 +18,9 @@ def add_trainer_availability(
     end_time: datetime,
 ) -> TrainerAvailability:
     """Add a non-overlapping availability interval for a trainer."""
+    start_time = to_naive_utc(start_time)
+    end_time = to_naive_utc(end_time)
+
     if start_time >= end_time:
         raise ValueError("End time must be after start time.")
 
@@ -69,6 +73,9 @@ def book_pt_session(
     end_time: datetime,
 ) -> PTSession:
     """Book a PT session within a trainer's available hours."""
+    start_time = to_naive_utc(start_time)
+    end_time = to_naive_utc(end_time)
+
     if start_time >= end_time:
         raise ValueError("End time must be after start time.")
 
@@ -140,6 +147,9 @@ def reschedule_pt_session(
     new_end_time: datetime,
 ) -> PTSession:
     """Reschedule an existing PT session."""
+    new_start_time = to_naive_utc(new_start_time)
+    new_end_time = to_naive_utc(new_end_time)
+
     if new_start_time >= new_end_time:
         raise ValueError("End time must be after start time.")
 

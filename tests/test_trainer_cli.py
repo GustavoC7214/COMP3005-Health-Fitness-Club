@@ -20,11 +20,16 @@ def test_read_integer():
 
 
 def test_read_datetime():
-    """Datetime input should follow the required format."""
-    with patch("builtins.input", return_value="2026-11-17 10:30"):
+    """Datetime input should explicitly request UTC."""
+    with patch(
+        "builtins.input",
+        return_value="2026-11-17 10:30",
+    ) as mock_input:
         result = read_datetime("Start time")
 
     assert result == datetime(2026, 11, 17, 10, 30)
+
+    mock_input.assert_called_once_with("Start time (YYYY-MM-DD HH:MM, UTC): ")
 
 
 def test_exit_trainer_menu():
@@ -175,7 +180,10 @@ def test_view_availability_menu(capsys):
         run_trainer_cli()
 
     mock_get.assert_called_once_with(fake_session, 5)
-    assert "2026-11-19 09:00:00" in capsys.readouterr().out
+    output = capsys.readouterr().out
+
+    assert "2026-11-19 09:00:00 UTC" in output
+    assert "2026-11-19 12:00:00 UTC" in output
 
 
 def test_reschedule_pt_session_menu(capsys):
@@ -278,6 +286,8 @@ def test_view_trainer_schedule_menu(capsys):
     output = capsys.readouterr().out
     assert "Session 21" in output
     assert "Member 10" in output
+    assert "2026-11-19 10:00:00 UTC" in output
+    assert "2026-11-19 11:00:00 UTC" in output
 
 
 def test_view_assigned_members_menu(capsys):
@@ -319,6 +329,8 @@ def test_view_assigned_members_menu(capsys):
     assert "Session 21" in output
     assert "No health metrics recorded." in output
     assert "No active fitness goals." in output
+    assert "2026-11-19 10:00:00 UTC" in output
+    assert "2026-11-19 11:00:00 UTC" in output
 
 
 def test_search_assigned_members_menu(capsys):
@@ -473,3 +485,13 @@ def test_view_assigned_member_health_information(capsys):
     assert "Active fitness goals:" in output
     assert "Target weight: 75 kg" in output
     assert "Baseline weight: 80 kg" in output
+
+
+def test_trainer_menu_displays_timezone(capsys):
+    """The trainer menu should identify the scheduling timezone."""
+    with patch("builtins.input", return_value="0"):
+        run_trainer_cli()
+
+    output = capsys.readouterr().out
+
+    assert "All scheduling times are in UTC." in output

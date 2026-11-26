@@ -1,10 +1,28 @@
 """Shared representation of trainer schedule entries."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from app.models.trainer import PTSession
+
+
+def to_utc(value: datetime) -> datetime:
+    """Interpret naive scheduling timestamps as UTC."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+
+    return value.astimezone(UTC)
+
+
+def to_naive_utc(value: datetime) -> datetime:
+    """Normalize a timestamp to naive UTC for database storage."""
+    return to_utc(value).replace(tzinfo=None)
+
+
+def format_schedule_time(value: datetime) -> str:
+    """Display a scheduling timestamp explicitly in UTC."""
+    return to_utc(value).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 @dataclass(frozen=True)
@@ -40,8 +58,8 @@ def build_trainer_schedule(
     return sorted(
         entries,
         key=lambda entry: (
-            entry.start_time,
-            entry.end_time,
+            to_utc(entry.start_time),
+            to_utc(entry.end_time),
             entry.entry_type,
             entry.entry_id,
         ),
