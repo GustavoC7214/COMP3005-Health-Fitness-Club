@@ -1,9 +1,23 @@
-"""Register Member 1 models with the shared Base.
+"""Register shared Health and Fitness Club ORM models."""
 
-When merging feature/trainers, retain BOTH its imports and these imports.
-"""
+from app.models import (
+    ClassAttendance,
+    FitnessGoal,
+    GroupClass,
+    HealthMetric,
+    Member,
+    PTSession,
+    Trainer,
+    TrainerAvailability,
+)
 
-from app.models.member import FitnessGoal, HealthMetric, Member
-from app.models.member_attendance import ClassAttendance, GroupClass
-
-__all__ = ["ClassAttendance", "FitnessGoal", "GroupClass", "HealthMetric", "Member"]
+__all__ = [
+    "ClassAttendance",
+    "FitnessGoal",
+    "GroupClass",
+    "HealthMetric",
+    "Member",
+    "PTSession",
+    "Trainer",
+    "TrainerAvailability",
+]

@@ -166,7 +166,11 @@ def run_member_cli(*, integrations: DashboardIntegrations | None = None):
     while True:
         print("\n=== Member Management & Health Tracking ===")
         print(
-            "1. User Registration\n2. Profile Management\n3. Health History\n4. Member Dashboard\n0. Exit"
+            "1. User Registration\n"
+            "2. Profile Management\n"
+            "3. Health History\n"
+            "4. Member Dashboard\n"
+            "0. Return to main menu"
         )
         try:
             choice = input("Select an operation: ").strip()
